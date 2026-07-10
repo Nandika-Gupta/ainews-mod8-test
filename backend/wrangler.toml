@@ -1,0 +1,7 @@
+name = "ainews-mod8-test"
+compatibility_date = "2024-03-20"
+compatibility_flags = ["nodejs_compat"]
+main = "src/index.ts"
+
+[observability]
+enabled = true

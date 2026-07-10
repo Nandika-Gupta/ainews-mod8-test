@@ -1,0 +1,34 @@
+{
+  "name": "backend",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "prisma generate && tsc",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.8.0",
+    "@neondatabase/serverless": "^1.1.0",
+    "@prisma/adapter-neon": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "hono": "^4.12.27",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260710.1",
+    "@types/node": "^20.11.17",
+    "@types/ws": "^8.18.1",
+    "dotenv": "^17.4.2",
+    "prisma": "^7.8.0",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.110.0"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.8.0": true,
+    "esbuild@0.28.1": true,
+    "prisma@7.8.0": true,
+    "sharp@0.34.5": true,
+    "workerd@1.20260708.1": true
+  }
+}
