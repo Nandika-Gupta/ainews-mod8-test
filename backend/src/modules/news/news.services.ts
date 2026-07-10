@@ -169,4 +169,83 @@ export class NewsService {
     });
     return publishers.map((p) => p.id);
   }
+
+  /**
+   * The public NewsArticleDTO.id is the article's SLUG (see withTrendingScores),
+   * not its real database id — so vote/bookmark/comment writes, which foreign-key
+   * against News.id, need this to resolve slug -> real id first.
+   */
+  async getArticleIdBySlug(slug: string): Promise<string | null> {
+    const row = await this.prisma.news.findUnique({ where: { slug }, select: { id: true } });
+    return row?.id ?? null;
+  }
+
+  /**
+   * Toggles the clientId's vote: clicking the same direction again removes it
+   * (matches the old app's local-toggle UX), clicking the other direction
+   * switches it. Recomputes News.upvotes/downvotes from the NewsVote rows
+   * after every change, same "aggregate recomputed from source rows" pattern
+   * used elsewhere in this stack (see AiOrbit's recomputeToolRating).
+   */
+  async setVote(articleId: string, clientId: string, value: 1 | -1) {
+    const existing = await this.prisma.newsVote.findUnique({
+      where: { articleId_clientId: { articleId, clientId } },
+    });
+
+    let myVote: 1 | -1 | null;
+    if (existing && existing.value === value) {
+      await this.prisma.newsVote.delete({ where: { id: existing.id } });
+      myVote = null;
+    } else {
+      await this.prisma.newsVote.upsert({
+        where: { articleId_clientId: { articleId, clientId } },
+        update: { value },
+        create: { articleId, clientId, value },
+      });
+      myVote = value;
+    }
+
+    const [upvotes, downvotes] = await Promise.all([
+      this.prisma.newsVote.count({ where: { articleId, value: 1 } }),
+      this.prisma.newsVote.count({ where: { articleId, value: -1 } }),
+    ]);
+    await this.prisma.news.update({ where: { id: articleId }, data: { upvotes, downvotes } });
+
+    return { upvotes, downvotes, myVote };
+  }
+
+  async addBookmark(articleId: string, clientId: string): Promise<{ bookmarked: true }> {
+    await this.prisma.newsBookmark.upsert({
+      where: { articleId_clientId: { articleId, clientId } },
+      update: {},
+      create: { articleId, clientId },
+    });
+    return { bookmarked: true };
+  }
+
+  async removeBookmark(articleId: string, clientId: string): Promise<{ bookmarked: false }> {
+    await this.prisma.newsBookmark.deleteMany({ where: { articleId, clientId } });
+    return { bookmarked: false };
+  }
+
+  async addComment(articleId: string, clientId: string, authorName: string | undefined, body: string) {
+    const comment = await this.prisma.newsComment.create({
+      data: {
+        articleId,
+        clientId,
+        body,
+        ...(authorName ? { authorName } : {}),
+      },
+    });
+    return { id: comment.id, authorName: comment.authorName, body: comment.body, createdAt: comment.createdAt.toISOString() };
+  }
+
+  /** Newest first, matching the old (session-only) comment box's display order. Never exposes clientId — that's the anonymous poster's own identifier, not public. */
+  async getComments(articleId: string) {
+    const rows = await this.prisma.newsComment.findMany({
+      where: { articleId },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((c) => ({ id: c.id, authorName: c.authorName, body: c.body, createdAt: c.createdAt.toISOString() }));
+  }
 }
