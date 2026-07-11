@@ -22,7 +22,14 @@ import type { FeedSource } from "./sources.js";
 export interface IngestionContext {
   prisma: PrismaClient;
   llmKeys: SummarizerKeys;
-  bucket: R2Bucket;
+  /**
+   * Optional — undefined when this pipeline runs as a plain Node script
+   * (see scripts/ingest.ts), which has no Workers R2 binding to reach.
+   * publisherRegistry.ts's resolveLogo() degrades gracefully to the
+   * bundled-SVG-or-favicon tiers when this is absent — same behavior the
+   * whole pipeline had before R2 was wired up.
+   */
+  bucket?: R2Bucket;
 }
 
 const THIN_SUMMARY_WORD_THRESHOLD = 40;
@@ -268,7 +275,7 @@ async function summarizePrepared(p: PreparedEntry, llmKeys: SummarizerKeys): Pro
 }
 
 /** Sequential DB write, in original entry order — the only phase that touches Publisher/slug/create, so no race risk even though phase 2 (summarization) ran concurrently. */
-async function finalizePrepared(prisma: PrismaClient, bucket: R2Bucket, p: PreparedEntry, aiSummary: string, source: FeedSource): Promise<void> {
+async function finalizePrepared(prisma: PrismaClient, bucket: R2Bucket | undefined, p: PreparedEntry, aiSummary: string, source: FeedSource): Promise<void> {
   const publisher = await resolvePublisher(prisma, bucket, p.domain, p.nameHint);
   const slug = await uniqueSlug(prisma, p.title);
   const topics = deriveTopics(p.entry.title, p.summary);

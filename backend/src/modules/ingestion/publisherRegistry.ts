@@ -71,22 +71,29 @@ function guessDisplayName(domain: string): string {
  * Resolves a publisher's logo at creation time:
  *   1. A bundled brand SVG, if this is a known source (SOURCE_LOGOS) — cheap,
  *      no network call, so this is checked before the real download tier.
- *   2. Otherwise, the real resolver (logoResolver.ts): fetch the domain's
- *      homepage, parse <head> icon links + manifest, download the
- *      highest-resolution one, and store it in R2.
- *   3. Only if that download genuinely fails (network error, no icons
- *      found, known bot-protected domain) does this fall back to a live
- *      favicon/aggregator URL, so publisher creation never hard-fails.
+ *   2. Otherwise, if an R2 bucket is available, the real resolver
+ *      (logoResolver.ts): fetch the domain's homepage, parse <head> icon
+ *      links + manifest, download the highest-resolution one, and store it
+ *      in R2.
+ *   3. Falls back to a live favicon/aggregator URL if the download
+ *      genuinely fails (network error, no icons found, known
+ *      bot-protected domain) — or if no bucket was given at all, which
+ *      happens when this runs as a plain Node script outside Workers (see
+ *      scripts/ingest.ts) with no R2 binding to reach. Same degradation
+ *      the whole pipeline used before R2 was wired up. Publisher creation
+ *      never hard-fails either way.
  * The result is stored on the Publisher row — never re-resolved per article.
  */
-async function resolveLogo(bucket: R2Bucket, domain: string, sourceKey?: string): Promise<{ logoUrl: string; faviconUrl: string }> {
+async function resolveLogo(bucket: R2Bucket | undefined, domain: string, sourceKey?: string): Promise<{ logoUrl: string; faviconUrl: string }> {
   const faviconUrl = `https://${domain}/favicon.ico`;
 
   const bundled = sourceKey ? SOURCE_LOGOS[sourceKey] : undefined;
   if (bundled) return { logoUrl: `/logos/${bundled}`, faviconUrl };
 
-  const downloaded = await resolvePublisherLogo(bucket, domain);
-  if (downloaded) return { logoUrl: downloaded, faviconUrl };
+  if (bucket) {
+    const downloaded = await resolvePublisherLogo(bucket, domain);
+    if (downloaded) return { logoUrl: downloaded, faviconUrl };
+  }
 
   return { logoUrl: `https://www.google.com/s2/favicons?domain=${domain}&sz=128`, faviconUrl };
 }
@@ -97,7 +104,7 @@ async function resolveLogo(bucket: R2Bucket, domain: string, sourceKey?: string)
  * `<title>` or OpenGraph `og:site_name`) when the domain isn't one we
  * already know about.
  */
-export async function resolvePublisher(prisma: PrismaClient, bucket: R2Bucket, domain: string, nameHint?: string | null) {
+export async function resolvePublisher(prisma: PrismaClient, bucket: R2Bucket | undefined, domain: string, nameHint?: string | null) {
   const existing = await prisma.publisher.findUnique({ where: { domain } });
   if (existing) return existing;
 
