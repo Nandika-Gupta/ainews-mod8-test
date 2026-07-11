@@ -11,7 +11,9 @@
     "@neondatabase/serverless": "^1.1.0",
     "@prisma/adapter-neon": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "cheerio": "^1.2.0",
     "hono": "^4.12.27",
+    "rss-parser": "^3.13.0",
     "ws": "^8.21.0",
     "zod": "^4.4.3"
   },

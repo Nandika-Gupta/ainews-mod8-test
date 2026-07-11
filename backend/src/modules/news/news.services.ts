@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import type { News, Publisher, Topic } from "@prisma/client";
-import { GENERIC_TOPIC_FALLBACK, COMPANY_TOPIC_LABELS } from "./news.constants.js";
+import { GENERIC_TOPIC_FALLBACK, COMPANY_TOPIC_LABELS } from "../ingestion/topicTagging.js";
 import type { NewsArticleDTO, NewsCategory, NewsFilterChip, NewsSource } from "./news.types.js";
 
 type ArticleRow = News & { publisher: Publisher; topics: Topic[] };
