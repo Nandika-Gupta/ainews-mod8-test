@@ -15,10 +15,13 @@ crons = ["0 */12 * * *"]
 
 # Publisher logo storage (replaces the old app's public/logos/publishers/
 # disk writes, which are impossible in Workers - see publisherRegistry.ts).
-# NOTE: this binding works against a local-simulated bucket under
-# `wrangler dev` with no setup. Real deployment needs a real bucket created
-# first via `wrangler r2 bucket create ainews-mod8-test-logos` - not done
-# here, that's a real Cloudflare-account action.
+# This binding also works against a local-simulated bucket under
+# `wrangler dev` with no setup at all. bucket_name below is a real bucket on
+# Nandika's personal Cloudflare test account (nandika.g2@gmail.com) - created
+# manually via the dashboard since a brand-new account needs R2 enabled
+# there first (one-time, account-owner-only step; `wrangler r2 bucket
+# create` can't do it). Isolated test infra, unrelated to the shared team
+# account.
 [[r2_buckets]]
 binding = "LOGO_BUCKET"
-bucket_name = "ainews-mod8-test-logos"
+bucket_name = "ainews-test-logos"
