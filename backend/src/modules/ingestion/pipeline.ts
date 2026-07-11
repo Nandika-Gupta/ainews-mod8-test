@@ -9,6 +9,7 @@
  * imported as module-level singletons.
  */
 import type { PrismaClient } from "@prisma/client";
+import type { R2Bucket } from "@cloudflare/workers-types";
 import { parseFeed, type FeedEntry } from "./feedParser.js";
 import { normalizeUrl, domainFromUrl, robustParseDate, slugify, cleanText, titleTokens, titleSimilarity } from "./normalize.js";
 import { resolvePublisher } from "./publisherRegistry.js";
@@ -21,6 +22,7 @@ import type { FeedSource } from "./sources.js";
 export interface IngestionContext {
   prisma: PrismaClient;
   llmKeys: SummarizerKeys;
+  bucket: R2Bucket;
 }
 
 const THIN_SUMMARY_WORD_THRESHOLD = 40;
@@ -241,15 +243,18 @@ async function enrichValidated(v: ValidatedEntry): Promise<PreparedEntry> {
 // Hard wall-clock ceiling on the LLM-summarization phase, separate from and
 // in addition to llmSummarizer.ts's per-tier rate-limit gates. Those gates
 // correctly pace *how fast* any one provider gets hit, but say nothing about
-// *how long the whole run takes*. Ported unchanged from the old app for now;
-// this number was tuned against GitHub Actions' 20-minute job budget and
-// will need revisiting once this runs on a real Cloudflare Cron Trigger
-// (see the earlier discussion — Workers' wall-clock ceiling per invocation
-// is almost certainly tighter, but the real number depends on plan tier and
-// hasn't been confirmed yet). Not touched in this step since ingestion is
-// only being run manually right now, not on a schedule.
+// *how long the whole run takes*. The old app tuned this at 7 minutes
+// against GitHub Actions' ~20-minute job budget (roughly a 35% share).
+// Cloudflare's Cron Trigger wall-clock ceiling is a confirmed, hard 15
+// minutes per invocation regardless of plan (see
+// https://developers.cloudflare.com/workers/platform/limits/) — retuned to
+// the same ~35% share of that: 5 minutes, leaving ~10 minutes for feed
+// fetching, validation, enrichment, publisher/logo resolution (now
+// including real R2 downloads on first sight of a new domain), DB writes,
+// and prune. See also HN_DISCOVERY_LIMIT in ingestion.service.ts — this
+// budget is a second line of defense, not the only bound on run length.
 const PIPELINE_STARTED_AT = Date.now();
-const SUMMARIZATION_BUDGET_MS = 7 * 60_000;
+const SUMMARIZATION_BUDGET_MS = 5 * 60_000;
 
 function withinSummarizationBudget(): boolean {
   return Date.now() - PIPELINE_STARTED_AT < SUMMARIZATION_BUDGET_MS;
@@ -263,8 +268,8 @@ async function summarizePrepared(p: PreparedEntry, llmKeys: SummarizerKeys): Pro
 }
 
 /** Sequential DB write, in original entry order — the only phase that touches Publisher/slug/create, so no race risk even though phase 2 (summarization) ran concurrently. */
-async function finalizePrepared(prisma: PrismaClient, p: PreparedEntry, aiSummary: string, source: FeedSource): Promise<void> {
-  const publisher = await resolvePublisher(prisma, p.domain, p.nameHint);
+async function finalizePrepared(prisma: PrismaClient, bucket: R2Bucket, p: PreparedEntry, aiSummary: string, source: FeedSource): Promise<void> {
+  const publisher = await resolvePublisher(prisma, bucket, p.domain, p.nameHint);
   const slug = await uniqueSlug(prisma, p.title);
   const topics = deriveTopics(p.entry.title, p.summary);
   const dek = p.summary || p.bodyExcerpt || NO_SUMMARY_PLACEHOLDER;
@@ -358,7 +363,7 @@ async function ingestEntries(ctx: IngestionContext, entries: FeedEntry[], source
       continue;
     }
     try {
-      await finalizePrepared(prisma, prepared[i], summaries[i], source);
+      await finalizePrepared(prisma, ctx.bucket, prepared[i], summaries[i], source);
       result.created++;
     } catch (err) {
       result.errors.push(`"${prepared[i].title}": ${(err as Error).message}`);
@@ -398,13 +403,23 @@ const HN_DISCOVERY_SOURCE: FeedSource = {
   kind: "discovery",
 };
 
-/** Discovers AI company announcements via Hacker News (see hnDiscovery.ts) and runs them through the same ingest path as an RSS source. */
-export async function ingestHackerNewsDiscovery(ctx: IngestionContext, titleIndex?: RecentTitleIndex): Promise<PipelineResult> {
+/**
+ * Discovers AI company announcements via Hacker News (see hnDiscovery.ts)
+ * and runs them through the same ingest path as an RSS source. `limit`
+ * caps the most-recent N hits (see HN_DISCOVERY_LIMIT in
+ * ingestion.service.ts) — unlike an RSS source, which is naturally bounded
+ * by how many entries it publishes, HN discovery searches 10 queries in
+ * parallel and had no analogous cap in the old app. Fine against GitHub
+ * Actions' ~20-minute budget; not fine against Workers' hard 15-minute
+ * Cron Trigger ceiling — a single real run returned 101 raw hits, which
+ * serialized through the Gemini rate gate alone is 7.5+ minutes.
+ */
+export async function ingestHackerNewsDiscovery(ctx: IngestionContext, titleIndex?: RecentTitleIndex, limit?: number): Promise<PipelineResult> {
   const index = titleIndex ?? (await loadRecentTitleIndex(ctx.prisma));
 
   let entries: FeedEntry[];
   try {
-    entries = await discoverFromHackerNews();
+    entries = await discoverFromHackerNews(undefined, limit);
   } catch (err) {
     const result = newPipelineResult(HN_DISCOVERY_SOURCE.name);
     result.errors.push(`HN discovery failed: ${(err as Error).message}`);

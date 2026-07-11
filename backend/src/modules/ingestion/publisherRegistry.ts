@@ -12,12 +12,14 @@
  * PrismaClient per request/invocation via the Neon adapter (see index.ts),
  * not a shared process-lifetime instance the way the old Next.js app could.
  *
- * The other deliberate difference — the actual reason this file needed any
- * changes at all — is resolveLogo() below. See its comment for the R2
- * boundary.
+ * resolveLogo() below now takes an R2Bucket — the real logo-download tier
+ * (logoResolver.ts) is back in the mix, storing to R2 instead of the old
+ * app's local disk.
  */
 import type { PrismaClient } from "@prisma/client";
+import type { R2Bucket } from "@cloudflare/workers-types";
 import { SOURCE_LOGOS } from "./sourceLogos.js";
+import { resolvePublisherLogo } from "./logoResolver.js";
 
 /**
  * Hand-curated display metadata for well-known publishers, so a domain we
@@ -67,29 +69,24 @@ function guessDisplayName(domain: string): string {
 
 /**
  * Resolves a publisher's logo at creation time:
- *   1. A bundled brand SVG, if this is a known source (SOURCE_LOGOS).
- *   2. Otherwise, a live favicon-aggregator URL.
- *
- * The old app had a real middle tier here: fetch the domain's homepage,
- * parse <head> icon links + a manifest, download the best one, and store it
- * under public/logos/publishers/ so it's resolved once and reused forever
- * (see the old ingestion/logoResolver.ts). That tier is deliberately NOT
- * ported here — `writeFile`/`mkdir` to a local disk path is not a "might
- * not work in Workers," it's structurally impossible; Workers has no
- * filesystem at all, and nodejs_compat doesn't polyfill one.
- *
- * TODO(R2): reintroduce that middle tier once an R2 bucket binding exists —
- * same homepage-fetch + icon-scoring logic from logoResolver.ts, but PUT the
- * downloaded bytes to R2 instead of writeFile(), and return the R2-backed
- * URL instead of a local static path. Until then every non-bundled publisher
- * gets the live favicon URL below, which is a real, working, permanent
- * logo — just not the "downloaded once and cached forever" version.
+ *   1. A bundled brand SVG, if this is a known source (SOURCE_LOGOS) — cheap,
+ *      no network call, so this is checked before the real download tier.
+ *   2. Otherwise, the real resolver (logoResolver.ts): fetch the domain's
+ *      homepage, parse <head> icon links + manifest, download the
+ *      highest-resolution one, and store it in R2.
+ *   3. Only if that download genuinely fails (network error, no icons
+ *      found, known bot-protected domain) does this fall back to a live
+ *      favicon/aggregator URL, so publisher creation never hard-fails.
+ * The result is stored on the Publisher row — never re-resolved per article.
  */
-function resolveLogo(domain: string, sourceKey?: string): { logoUrl: string; faviconUrl: string } {
+async function resolveLogo(bucket: R2Bucket, domain: string, sourceKey?: string): Promise<{ logoUrl: string; faviconUrl: string }> {
   const faviconUrl = `https://${domain}/favicon.ico`;
 
   const bundled = sourceKey ? SOURCE_LOGOS[sourceKey] : undefined;
   if (bundled) return { logoUrl: `/logos/${bundled}`, faviconUrl };
+
+  const downloaded = await resolvePublisherLogo(bucket, domain);
+  if (downloaded) return { logoUrl: downloaded, faviconUrl };
 
   return { logoUrl: `https://www.google.com/s2/favicons?domain=${domain}&sz=128`, faviconUrl };
 }
@@ -100,12 +97,12 @@ function resolveLogo(domain: string, sourceKey?: string): { logoUrl: string; fav
  * `<title>` or OpenGraph `og:site_name`) when the domain isn't one we
  * already know about.
  */
-export async function resolvePublisher(prisma: PrismaClient, domain: string, nameHint?: string | null) {
+export async function resolvePublisher(prisma: PrismaClient, bucket: R2Bucket, domain: string, nameHint?: string | null) {
   const existing = await prisma.publisher.findUnique({ where: { domain } });
   if (existing) return existing;
 
   const known = KNOWN_BY_DOMAIN[domain];
-  const { logoUrl, faviconUrl } = resolveLogo(domain, known?.sourceKey);
+  const { logoUrl, faviconUrl } = await resolveLogo(bucket, domain, known?.sourceKey);
 
   return prisma.publisher.create({
     data: {

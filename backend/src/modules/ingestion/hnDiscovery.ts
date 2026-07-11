@@ -62,8 +62,12 @@ async function searchOneQuery(query: string): Promise<FeedEntry[]> {
   }
 }
 
-/** Runs every discovery query in parallel and flattens/dedupes hits by link. */
-export async function discoverFromHackerNews(queries: string[] = HN_DISCOVERY_QUERIES): Promise<FeedEntry[]> {
+/**
+ * Runs every discovery query in parallel and flattens/dedupes hits by link.
+ * `limit`, if given, keeps only the most recent N hits (by publishedRaw) —
+ * see ingestHackerNewsDiscovery() in pipeline.ts for why this cap exists.
+ */
+export async function discoverFromHackerNews(queries: string[] = HN_DISCOVERY_QUERIES, limit?: number): Promise<FeedEntry[]> {
   const perQuery = await Promise.all(queries.map(searchOneQuery));
   const byLink = new Map<string, FeedEntry>();
   for (const entries of perQuery) {
@@ -71,5 +75,13 @@ export async function discoverFromHackerNews(queries: string[] = HN_DISCOVERY_QU
       if (!byLink.has(entry.link)) byLink.set(entry.link, entry);
     }
   }
-  return Array.from(byLink.values());
+
+  const all = Array.from(byLink.values());
+  all.sort((a, b) => {
+    const at = a.publishedRaw ? new Date(a.publishedRaw).getTime() : 0;
+    const bt = b.publishedRaw ? new Date(b.publishedRaw).getTime() : 0;
+    return bt - at;
+  });
+
+  return typeof limit === "number" ? all.slice(0, limit) : all;
 }

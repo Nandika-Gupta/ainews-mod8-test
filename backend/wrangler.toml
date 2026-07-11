@@ -5,3 +5,20 @@ main = "src/index.ts"
 
 [observability]
 enabled = true
+
+# Every 12 hours (00:00 and 12:00 UTC). Wall-clock duration per invocation is
+# capped at 15 minutes by Cloudflare regardless of plan - see
+# SUMMARIZATION_BUDGET_MS and HN_DISCOVERY_LIMIT in the ingestion module for
+# how the pipeline stays within that.
+[triggers]
+crons = ["0 */12 * * *"]
+
+# Publisher logo storage (replaces the old app's public/logos/publishers/
+# disk writes, which are impossible in Workers - see publisherRegistry.ts).
+# NOTE: this binding works against a local-simulated bucket under
+# `wrangler dev` with no setup. Real deployment needs a real bucket created
+# first via `wrangler r2 bucket create ainews-mod8-test-logos` - not done
+# here, that's a real Cloudflare-account action.
+[[r2_buckets]]
+binding = "LOGO_BUCKET"
+bucket_name = "ainews-mod8-test-logos"
