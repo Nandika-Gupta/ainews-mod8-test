@@ -1,1 +1,4 @@
 DATABASE_URL="postgresql://user:password@host/database?sslmode=require"
+# Zero-cost LLM summarization waterfall (see src/modules/ingestion/llmSummarizer.ts)
+GEMINI_API_KEY=""
+GROQ_API_KEY=""
